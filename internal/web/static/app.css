@@ -97,7 +97,8 @@ th.actions, td.actions { width: 1%; }
 
 /* JSON | dotenv switch above the plaintext document. */
 .formats { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
-.formats > * { width: auto; margin-bottom: 0; }
+/* :is(a, button) outranks Pico's full-width button[type=submit] (the edit page uses submit buttons). */
+.formats > :is(a, button) { width: auto; margin-bottom: 0; }
 
 /* The whole secret as one document: monospace, grows with its content. */
 textarea.plaintext {
