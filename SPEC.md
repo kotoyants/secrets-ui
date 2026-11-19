@@ -102,6 +102,14 @@ Admin only: import or un-import secrets, edit secret tags, manage roles and user
    Binary values cannot be revealed for editing, only replaced.
    Secrets the user cannot read return 404, so their existence is not revealed.
    Uses `resourceVersion` for optimistic locking (conflict → error with a reload prompt).
+5. View and edit pages have **Key/value | Plaintext** tabs. Plaintext shows the whole secret as one document,
+   switchable between **JSON** (`{"KEY": "value"}`, pretty-printed, sorted) and **dotenv** (`KEY=value` per line;
+   values with newlines, control characters, surrounding spaces or a leading `"` are written as JSON string
+   literals, e.g. `KEY="a\nb"`; blank lines and `#` comments are ignored). Opening Plaintext reveals every value
+   (one audited reveal with `"view": "plaintext"`). Editing as plaintext **replaces the whole secret**: keys missing
+   from the document are deleted. Switching format on the edit page converts the current (unsaved) text on the server;
+   parse or save errors re-render the form with the submitted text. JSON numbers/booleans are stored as their text;
+   null, objects and arrays are rejected. Secrets with binary values cannot use Plaintext (the tab is disabled).
 
 ## 6. Provider abstraction
 

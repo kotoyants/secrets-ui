@@ -161,7 +161,16 @@ type secretPage struct {
 	ManagedBy string
 	Missing   bool
 	Keys      []keyView
+	HasBinary bool // some value is binary, so the plaintext view is unavailable
+
+	// Plaintext view (?view=plaintext): the whole secret as one document.
+	Plaintext bool
+	Format    textFormat
+	Text      string
 }
+
+// BaseURL is the page URL, for the Key/value | Plaintext tabs.
+func (p secretPage) BaseURL() string { return "/secrets/" + idStr(p.ID) }
 
 // displayValue returns v as text, or base64 if it is binary.
 func displayValue(v []byte) (string, bool) {
@@ -185,26 +194,47 @@ func (h *handlers) buildSecretPage(r *http.Request, s *accessible, reveal func(k
 	}
 	page.ManagedBy = data.ManagedBy
 	for i, k := range data.SortedKeys() {
-		kv := keyView{Index: i, Key: k}
+		kv := keyView{Index: i, Key: k, Binary: !utf8.Valid(data.Values[k])}
+		page.HasBinary = page.HasBinary || kv.Binary
 		if reveal != nil && reveal(k) {
 			kv.Revealed = true
-			kv.Value, kv.Binary = displayValue(data.Values[k])
+			kv.Value, _ = displayValue(data.Values[k])
 		}
 		page.Keys = append(page.Keys, kv)
 	}
 	return page, nil
 }
 
+// secretView renders a secret with masked values, or with ?view=plaintext the
+// whole secret as one revealed (and audited) document in ?format=json|env.
 func (h *handlers) secretView(w http.ResponseWriter, r *http.Request) {
 	s, err := h.loadSecret(r)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	page, err := h.buildSecretPage(r, s, nil)
+	plaintext := r.URL.Query().Get("view") == "plaintext"
+	page, err := h.buildSecretPage(r, s, func(string) bool { return plaintext })
 	if err != nil {
 		h.fail(w, r, err)
 		return
+	}
+	if plaintext && !page.Missing && !page.HasBinary {
+		page.Plaintext = true
+		page.Format = parseTextFormat(r.URL.Query().Get("format"))
+		values := make(map[string][]byte, len(page.Keys))
+		names := make([]string, len(page.Keys))
+		for i, k := range page.Keys {
+			values[k.Key], names[i] = []byte(k.Value), k.Key
+		}
+		page.Text = formatText(page.Format, values)
+		h.logAudit(r, audit.ActionSecretReveal, "secret", idStr(s.Row.ID), map[string]any{
+			"ref": s.Ref.String(), "keys": names, "view": "plaintext",
+		})
+	}
+	// Per-key values are only ever sent through the reveal endpoint.
+	for i := range page.Keys {
+		page.Keys[i].Revealed, page.Keys[i].Value = false, ""
 	}
 	h.render(w, r, http.StatusOK, "secret", pageData{Nav: "home", Data: page})
 }
@@ -302,6 +332,12 @@ type editPage struct {
 	Version   string
 	Keys      []editKey
 	NewRows   []int
+	HasBinary bool // some value is binary, so plaintext editing is unavailable
+
+	// Plaintext editing (?view=plaintext): the whole secret as one document.
+	Plaintext bool
+	Format    textFormat
+	Text      string
 }
 
 func (h *handlers) loadWritable(w http.ResponseWriter, r *http.Request) (*accessible, *provider.SecretData, bool) {
@@ -327,14 +363,32 @@ func (h *handlers) secretEditForm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	page := newEditPage(s, data)
+	if r.URL.Query().Get("view") == "plaintext" && !page.HasBinary {
+		page.Plaintext = true
+		page.Format = parseTextFormat(r.URL.Query().Get("format"))
+		page.Text = formatText(page.Format, data.Values)
+		h.logAudit(r, audit.ActionSecretReveal, "secret", idStr(s.Row.ID), map[string]any{
+			"ref": s.Ref.String(), "keys": data.SortedKeys(), "view": "plaintext", "for": "edit",
+		})
+	}
+	h.render(w, r, http.StatusOK, "secret_edit", pageData{Nav: "home", Data: page})
+}
+
+// BaseURL is the page URL, for the Key/value | Plaintext tabs.
+func (p editPage) BaseURL() string { return "/secrets/" + idStr(p.ID) + "/edit" }
+
+func newEditPage(s *accessible, data *provider.SecretData) editPage {
 	page := editPage{ID: s.Row.ID, Group: s.Group, Name: s.Name, ManagedBy: data.ManagedBy, Version: data.Version}
 	for i, k := range data.SortedKeys() {
-		page.Keys = append(page.Keys, editKey{Index: i, Key: k, Binary: !utf8.Valid(data.Values[k])})
+		bin := !utf8.Valid(data.Values[k])
+		page.HasBinary = page.HasBinary || bin
+		page.Keys = append(page.Keys, editKey{Index: i, Key: k, Binary: bin})
 	}
 	for i := range newKeyRows {
 		page.NewRows = append(page.NewRows, i)
 	}
-	h.render(w, r, http.StatusOK, "secret_edit", pageData{Nav: "home", Data: page})
+	return page
 }
 
 // secretSave applies the edit form. Existing keys keep their value when the field
@@ -347,6 +401,10 @@ func (h *handlers) secretSave(w http.ResponseWriter, r *http.Request) {
 	back := "/secrets/" + idStr(s.Row.ID)
 	if err := r.ParseForm(); err != nil {
 		h.done(w, r, back+"/edit", "", errorf("Invalid form."))
+		return
+	}
+	if r.PostForm.Get("view") == "plaintext" {
+		h.savePlaintext(w, r, s, current)
 		return
 	}
 	version := r.PostForm.Get("version")
@@ -402,6 +460,12 @@ func (h *handlers) secretSave(w http.ResponseWriter, r *http.Request) {
 		h.done(w, r, back+"/edit", "", err)
 		return
 	}
+	h.saved(w, r, s, current, changed, added, removed)
+}
+
+// saved audits a successful update and redirects to the secret.
+func (h *handlers) saved(w http.ResponseWriter, r *http.Request, s *accessible, current *provider.SecretData,
+	changed, added, removed []string) {
 	h.logAudit(r, audit.ActionSecretUpdate, "secret", idStr(s.Row.ID), map[string]any{
 		"ref": s.Ref.String(), "changed": changed, "added": added, "removed": removed,
 	})
@@ -409,5 +473,68 @@ func (h *handlers) secretSave(w http.ResponseWriter, r *http.Request) {
 	if current.ManagedBy != "" {
 		msg += " Note: it is managed by " + current.ManagedBy + ", which may overwrite your change."
 	}
-	h.done(w, r, back, msg, nil)
+	h.done(w, r, "/secrets/"+idStr(s.Row.ID), msg, nil)
+}
+
+// savePlaintext applies the plaintext edit form: the document replaces the whole
+// secret (keys missing from it are deleted). With "convert" set it only re-renders
+// the form with the document converted to that format. Parse and save errors
+// re-render the form with the submitted text, so edits are not lost.
+func (h *handlers) savePlaintext(w http.ResponseWriter, r *http.Request, s *accessible, current *provider.SecretData) {
+	page := newEditPage(s, current)
+	if page.HasBinary {
+		h.done(w, r, "/secrets/"+idStr(s.Row.ID)+"/edit", "", errorf("This secret has binary values; edit it as key/value."))
+		return
+	}
+	page.Plaintext = true
+	page.Version = r.PostForm.Get("version") // keep the version the user started from
+	page.Format = parseTextFormat(r.PostForm.Get("format"))
+	page.Text = r.PostForm.Get("text")
+	retry := func(err error) {
+		_, msg, known := describeErr(err)
+		if !known {
+			h.log.ErrorContext(r.Context(), "plaintext save failed", "path", r.URL.Path, "err", err)
+		}
+		h.render(w, r, http.StatusOK, "secret_edit", pageData{Nav: "home", Data: page, Flash: &flash{Kind: "error", Msg: msg}})
+	}
+
+	next, err := parseText(page.Format, page.Text)
+	if err != nil {
+		retry(err)
+		return
+	}
+	if to := r.PostForm.Get("convert"); to != "" {
+		page.Format = parseTextFormat(to)
+		page.Text = formatText(page.Format, next)
+		h.render(w, r, http.StatusOK, "secret_edit", pageData{Nav: "home", Data: page})
+		return
+	}
+	if page.Version != current.Version {
+		retry(provider.ErrConflict)
+		return
+	}
+	var changed, added, removed []string
+	for _, k := range slices.Sorted(maps.Keys(next)) {
+		old, exists := current.Values[k]
+		switch {
+		case !exists:
+			added = append(added, k)
+		case !bytes.Equal(old, next[k]):
+			changed = append(changed, k)
+		}
+	}
+	for _, k := range current.SortedKeys() {
+		if _, ok := next[k]; !ok {
+			removed = append(removed, k)
+		}
+	}
+	if len(changed)+len(added)+len(removed) == 0 {
+		h.done(w, r, "/secrets/"+idStr(s.Row.ID), "No changes.", nil)
+		return
+	}
+	if err := s.Provider.Update(r.Context(), s.Ref, &provider.SecretData{Values: next, Version: page.Version}); err != nil {
+		retry(err)
+		return
+	}
+	h.saved(w, r, s, current, changed, added, removed)
 }

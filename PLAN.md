@@ -100,6 +100,9 @@ Makefile
       content-hash `?v=` URLs (cached immutable) so a release never leaves browsers on stale CSS/JS
 - [x] Renamed project k8s-secret-ui / secret-manager → secrets-ui (repo, Go module, chart, image, binary, UI title
       "Secrets UI", JWT issuer, prod example values); released as 0.4.0
+- [x] Key/value | Plaintext tabs on the view and edit pages (like AWS Secrets Manager): the whole secret as one
+      JSON or dotenv document; opening Plaintext reveals all (audited); saving replaces the whole secret; switching
+      format on the edit page converts server-side and keeps edits; disabled for secrets with binary values
 
 ## Phase 7 — Deployment
 - [x] Helm chart `deploy/helm/secrets-ui`: Deployment (2 replicas), Service, ServiceAccount, PDB,

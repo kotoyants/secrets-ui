@@ -79,3 +79,33 @@ h2 { --pico-font-size: 1.35rem; }
 .reveal-toggle { margin: 0; }
 th.actions, td.actions { width: 1%; }
 .actions button { width: auto; margin-bottom: 0; }
+
+/* Key/value | Plaintext tabs on the secret view and edit pages. */
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+  margin-bottom: var(--pico-spacing);
+}
+.tabs > * {
+  padding: 0.4rem 1rem;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  text-decoration: none;
+}
+.tabs > [aria-current] { border-bottom-color: var(--pico-primary); font-weight: 600; }
+.tabs > .disabled { color: var(--pico-muted-color); cursor: not-allowed; }
+
+/* JSON | dotenv switch above the plaintext document. */
+.formats { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+.formats > * { width: auto; margin-bottom: 0; }
+
+/* The whole secret as one document: monospace, grows with its content. */
+textarea.plaintext {
+  font-family: var(--pico-font-family-monospace);
+  font-size: 0.875rem;
+  white-space: pre;
+  overflow-x: auto;
+  field-sizing: content;
+  min-height: 8lh;
+  max-height: 40lh;
+}

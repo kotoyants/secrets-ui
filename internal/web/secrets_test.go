@@ -427,3 +427,143 @@ func TestSecretExternalAndMissing(t *testing.T) {
 	}
 	mustContain(t, body, "no longer exists in its storage")
 }
+
+func TestSecretPlaintextView(t *testing.T) {
+	f := newSecretsFixture(t)
+
+	// Key/value view links to the plaintext tab without revealing anything.
+	_, body := f.do(t, f.bob, http.MethodGet, "/secrets/"+f.api, nil)
+	mustContain(t, body, `href="/secrets/`+f.api+`?view=plaintext&amp;format=json"`)
+
+	tests := []struct{ format, want string }{
+		{"json", "{\n  &#34;TOKEN&#34;: &#34;" + apiValue + "&#34;\n}\n</textarea>"},
+		{"env", "TOKEN=" + apiValue + "\n</textarea>"},
+		{"", "&#34;TOKEN&#34;: &#34;" + apiValue}, // defaults to JSON
+	}
+	for _, tt := range tests {
+		resp, body := f.do(t, f.bob, http.MethodGet, "/secrets/"+f.api+"?view=plaintext&format="+tt.format, nil)
+		if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "no-store" {
+			t.Fatalf("plaintext %q = %d, cache %q", tt.format, resp.StatusCode, resp.Header.Get("Cache-Control"))
+		}
+		mustContain(t, body, tt.want, `aria-current="page">Plaintext`)
+		if strings.Contains(body, "<code>TOKEN</code>") || strings.Contains(body, "/edit") {
+			t.Errorf("plaintext %q shows the key table or an edit link to a read-only user", tt.format)
+		}
+	}
+	if n := strings.Count(f.audit.String(), `"view":"plaintext"`); n != len(tests) {
+		t.Errorf("plaintext reveal audit events = %d, want %d", n, len(tests))
+	}
+	if strings.Contains(f.audit.String(), apiValue) {
+		t.Fatal("secret value in audit log")
+	}
+
+	// Writers get an edit link that keeps the view.
+	_, body = f.do(t, f.carol, http.MethodGet, "/secrets/"+f.api+"?view=plaintext&format=env", nil)
+	mustContain(t, body, `href="/secrets/`+f.api+`/edit?view=plaintext&amp;format=env"`)
+
+	// No access: 404, nothing revealed.
+	if resp, _ := f.do(t, f.alice, http.MethodGet, "/secrets/"+f.api+"?view=plaintext", nil); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("alice plaintext = %d, want 404", resp.StatusCode)
+	}
+
+	// Binary secrets: the tab is disabled and the key/value view is shown masked.
+	_, body = f.do(t, f.admin, http.MethodGet, "/secrets/"+f.bin+"?view=plaintext", nil)
+	mustContain(t, body, `<span class="disabled"`, "<code>BLOB</code>")
+	if strings.Contains(body, "//4A") {
+		t.Fatal("binary value shown")
+	}
+}
+
+func TestSecretPlaintextEdit(t *testing.T) {
+	f := newSecretsFixture(t)
+	path := "/secrets/" + f.api
+
+	// Read-only users cannot open or save it.
+	if resp, _ := f.do(t, f.bob, http.MethodGet, path+"/edit?view=plaintext", nil); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("bob plaintext edit = %d, want 403", resp.StatusCode)
+	}
+	if resp, _ := f.post(t, f.bob, path, url.Values{"view": {"plaintext"}, "text": {"{}"}}); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("bob plaintext save = %d, want 403", resp.StatusCode)
+	}
+
+	// The form is prefilled with every value (audited).
+	resp, body := f.do(t, f.carol, http.MethodGet, path+"/edit?view=plaintext&format=env", nil)
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("plaintext edit = %d", resp.StatusCode)
+	}
+	mustContain(t, body, ">\nTOKEN="+apiValue+"\n</textarea>", `name="format" value="env"`, `name="view" value="plaintext"`)
+	mustContain(t, f.audit.String(), `"for":"edit"`, `"view":"plaintext"`)
+	ver := versionRe.FindStringSubmatch(body)[1]
+
+	// Converting keeps the (unsaved) edits and saves nothing.
+	edited := "TOKEN=" + apiValue + "\nNEW=\"a\\nb\"\n"
+	_, body = f.post(t, f.carol, path, url.Values{
+		"version": {ver}, "view": {"plaintext"}, "format": {"env"}, "text": {edited}, "convert": {"json"},
+	})
+	mustContain(t, body, `&#34;NEW&#34;: &#34;a\nb&#34;`, `name="format" value="json"`)
+	if got := f.kubeData(t, "api"); len(got) != 1 {
+		t.Fatalf("convert changed the secret: %v", got)
+	}
+
+	// Parse errors re-render the form with the submitted text.
+	_, body = f.post(t, f.carol, path, url.Values{
+		"version": {ver}, "view": {"plaintext"}, "format": {"json"}, "text": {`{"TOKEN": "x",`},
+	})
+	mustContain(t, body, "flash-error", "Invalid JSON", `{&#34;TOKEN&#34;: &#34;x&#34;,</textarea>`)
+
+	// Save replaces the whole secret: TOKEN removed, two added.
+	resp, body = f.post(t, f.carol, path, url.Values{
+		"version": {ver}, "view": {"plaintext"}, "format": {"json"}, "text": {`{"NEW": "a\nb", "OTHER": "o"}`},
+	})
+	if resp.URL.Path != path {
+		t.Fatalf("after save: %s", resp.URL)
+	}
+	mustContain(t, body, "Secret saved.")
+	if got := f.kubeData(t, "api"); got["NEW"] != "a\nb" || got["OTHER"] != "o" || len(got) != 2 {
+		t.Fatalf("data after save = %v", got)
+	}
+	mustContain(t, f.audit.String(), `"added":["NEW","OTHER"]`, `"removed":["TOKEN"]`)
+
+	// Unchanged text.
+	ver = f.editVersion(t, f.carol, f.api)
+	_, body = f.post(t, f.carol, path, url.Values{
+		"version": {ver}, "view": {"plaintext"}, "format": {"env"}, "text": {"OTHER=o\nNEW=\"a\\nb\""},
+	})
+	mustContain(t, body, "No changes.")
+
+	// A stale version is a conflict; the text is kept so it can be copied.
+	_, body = f.post(t, f.carol, path, url.Values{
+		"version": {"stale"}, "view": {"plaintext"}, "format": {"env"}, "text": {"MINE=1"},
+	})
+	mustContain(t, body, "changed by someone else", "MINE=1</textarea>")
+
+	// Invalid key names are rejected by the provider, keeping the text.
+	_, body = f.post(t, f.carol, path, url.Values{
+		"version": {ver}, "view": {"plaintext"}, "format": {"env"}, "text": {"bad key=1"},
+	})
+	mustContain(t, body, "flash-error", "invalid secret data", "bad key=1</textarea>")
+	if got := f.kubeData(t, "api"); len(got) != 2 {
+		t.Fatalf("failed saves changed the secret: %v", got)
+	}
+
+	for _, v := range []string{apiValue, "a\\nb", `"o"`, "MINE"} {
+		if strings.Contains(f.audit.String(), v) {
+			t.Fatalf("value %q in audit log", v)
+		}
+	}
+
+	// Binary secrets can't be edited as plaintext.
+	_, body = f.do(t, f.admin, http.MethodGet, "/secrets/"+f.bin+"/edit?view=plaintext", nil)
+	mustContain(t, body, `<span class="disabled"`, "<code>BLOB</code>")
+	binVer := versionRe.FindStringSubmatch(body)[1]
+	_, body = f.post(t, f.admin, "/secrets/"+f.bin, url.Values{
+		"version": {binVer}, "view": {"plaintext"}, "format": {"json"}, "text": {"{}"},
+	})
+	mustContain(t, body, "binary values")
+	if _, err := f.kube.CoreV1().Secrets("front").Get(t.Context(), "bin", metav1.GetOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.kubeData(t, "bin"); len(got) != 1 {
+		t.Fatalf("binary secret changed: %v", got)
+	}
+}

@@ -52,6 +52,16 @@ func asset(name string) string { return "/static/" + name + "?v=" + assetVersion
 var funcs = template.FuncMap{
 	"asset": asset,
 	"join":  strings.Join,
+	// formats lists the plaintext formats for the format switch.
+	"formats": func() []struct {
+		ID    textFormat
+		Label string
+	} {
+		return []struct {
+			ID    textFormat
+			Label string
+		}{{formatJSON, "JSON"}, {formatEnv, "dotenv"}}
+	},
 	// lines is a textarea height for s: its line count, between 1 and 10.
 	"lines": func(s string) int { return min(max(strings.Count(s, "\n")+1, 1), 10) },
 	"time": func(t any) string {
