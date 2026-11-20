@@ -567,3 +567,41 @@ func TestSecretPlaintextEdit(t *testing.T) {
 		t.Fatalf("binary secret changed: %v", got)
 	}
 }
+
+func TestSecretEditBasicAuth(t *testing.T) {
+	f := newSecretsFixture(t)
+	ctx := t.Context()
+	if _, err := f.kube.CoreV1().Secrets("front").Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "front", Name: "web-auth", ResourceVersion: "1"},
+		Type:       corev1.SecretTypeBasicAuth,
+		Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("old")},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Listed for import and importable.
+	_, body := f.do(t, f.admin, http.MethodGet, "/admin/import", nil)
+	mustContain(t, body, "web-auth")
+	_, body = f.post(t, f.admin, "/admin/import", url.Values{"provider": {"k8s"},
+		"locator": {`{"name":"web-auth","namespace":"front"}`}, "tags": {"front"}})
+	mustContain(t, body, "Secret imported.")
+	secrets, _ := f.store.ListSecrets(ctx)
+	id := idStr(secrets[len(secrets)-1].ID)
+
+	// Carol (front read_write) changes the password.
+	ver := f.editVersion(t, f.carol, id)
+	_, body = f.post(t, f.carol, "/secrets/"+id, url.Values{"version": {ver}, "key": {"username", "password"}, "value": {"", "new"}})
+	mustContain(t, body, "Secret saved.")
+	if got := f.kubeData(t, "web-auth"); got["username"] != "admin" || got["password"] != "new" {
+		t.Fatalf("data = %v", got)
+	}
+
+	// Removing both username and password is rejected with a clear message.
+	ver = f.editVersion(t, f.carol, id)
+	_, body = f.post(t, f.carol, "/secrets/"+id, url.Values{"version": {ver}, "delete": {"username", "password"},
+		"key": {"realm"}, "value": {"r"}})
+	mustContain(t, body, "flash-error", "basic-auth secret needs")
+	if got := f.kubeData(t, "web-auth"); len(got) != 2 {
+		t.Fatalf("data changed: %v", got)
+	}
+}

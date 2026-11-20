@@ -2,7 +2,7 @@
 {{with .Data}}
 <h1>Import</h1>
 {{with .ListError}}<p class="flash flash-error" role="alert">{{.}}</p>{{end}}
-<p class="muted">Only <code>Opaque</code> secrets in allowed namespaces are listed. Secrets marked <em>external</em> are managed by
+<p class="muted">Only <code>Opaque</code> and <code>basic-auth</code> secrets in allowed namespaces are listed. Secrets marked <em>external</em> are managed by
 another tool, which may overwrite changes made here. Secrets without tags are visible to admins only.
 {{with .Tags}}Existing tags: {{join . ", "}}.{{end}}</p>
 

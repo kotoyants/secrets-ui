@@ -2,7 +2,7 @@
 
 A web app for managing Kubernetes secrets, with Google sign-in and tag-based access control.
 
-- Admins **import** existing `Opaque` secrets from allowed namespaces and put **tags** on them.
+- Admins **import** existing `Opaque` and `kubernetes.io/basic-auth` secrets from allowed namespaces and put **tags** on them.
 - **Roles** have tags and a permission (`read` or `read_write`). A user can access a secret only if their
   roles together have **all** of the secret's tags.
 - Users reveal values per key or all at once (every reveal is audited) and, with `read_write`, edit them.

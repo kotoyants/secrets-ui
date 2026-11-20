@@ -29,7 +29,13 @@ const (
 	locName      = "name"
 )
 
-// Provider accesses Opaque Secrets in allowed namespaces.
+// supportedTypes are the Secret types the app lists and edits: plain key/value
+// secrets. Others (TLS, docker config, service-account tokens) are managed elsewhere.
+var supportedTypes = []corev1.SecretType{corev1.SecretTypeOpaque, corev1.SecretTypeBasicAuth}
+
+func supported(t corev1.SecretType) bool { return t == "" || slices.Contains(supportedTypes, t) }
+
+// Provider accesses Opaque and basic-auth Secrets in allowed namespaces.
 type Provider struct {
 	client     corev1client.SecretsGetter
 	namespaces []string
@@ -82,34 +88,42 @@ func Ref(namespace, name string) provider.SecretRef {
 	return provider.SecretRef{Provider: ID, Locator: map[string]string{locNamespace: namespace, locName: name}}
 }
 
-// List implements provider.Provider. Only Opaque secrets in allowed namespaces are returned.
+// List implements provider.Provider. Only secrets of supported types in allowed
+// namespaces are returned.
 func (p *Provider) List(ctx context.Context) ([]provider.SecretInfo, error) {
 	var out []provider.SecretInfo
 	for _, ns := range p.namespaces {
-		list, err := p.client.Secrets(ns).List(ctx, metav1.ListOptions{
-			FieldSelector: "type=" + string(corev1.SecretTypeOpaque),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("list secrets in %s: %w", ns, mapErr(err))
-		}
-		for i := range list.Items {
-			s := &list.Items[i]
-			if s.Type != corev1.SecretTypeOpaque && s.Type != "" {
-				continue // field selector is not honored by every client (e.g. fakes)
+		for _, typ := range supportedTypes {
+			// One request per type, so unsupported secrets (e.g. TLS keys) are never fetched.
+			list, err := p.client.Secrets(ns).List(ctx, metav1.ListOptions{FieldSelector: "type=" + string(typ)})
+			if err != nil {
+				return nil, fmt.Errorf("list secrets in %s: %w", ns, mapErr(err))
 			}
-			out = append(out, provider.SecretInfo{
-				Ref:      Ref(s.Namespace, s.Name),
-				Group:    s.Namespace,
-				Name:     s.Name,
-				Keys:     slices.Sorted(maps.Keys(s.Data)),
-				External: detectExternal(s),
-			})
+			out = appendInfos(out, list.Items, typ)
 		}
 	}
 	slices.SortFunc(out, func(a, b provider.SecretInfo) int {
 		return strings.Compare(a.Group+"/"+a.Name, b.Group+"/"+b.Name)
 	})
 	return out, nil
+}
+
+// appendInfos adds the secrets of type typ from items to out.
+func appendInfos(out []provider.SecretInfo, items []corev1.Secret, typ corev1.SecretType) []provider.SecretInfo {
+	for i := range items {
+		s := &items[i]
+		if s.Type != typ && (s.Type != "" || typ != corev1.SecretTypeOpaque) {
+			continue // field selector is not honored by every client (e.g. fakes)
+		}
+		out = append(out, provider.SecretInfo{
+			Ref:      Ref(s.Namespace, s.Name),
+			Group:    s.Namespace,
+			Name:     s.Name,
+			Keys:     slices.Sorted(maps.Keys(s.Data)),
+			External: detectExternal(s),
+		})
+	}
+	return out
 }
 
 // Get implements provider.Provider.
@@ -152,6 +166,14 @@ func (p *Provider) Update(ctx context.Context, ref provider.SecretRef, data *pro
 	if s.ResourceVersion != data.Version {
 		return provider.ErrConflict
 	}
+	if s.Type == corev1.SecretTypeBasicAuth {
+		_, user := data.Values[corev1.BasicAuthUsernameKey]
+		_, pass := data.Values[corev1.BasicAuthPasswordKey]
+		if !user && !pass {
+			return fmt.Errorf("%w: a basic-auth secret needs a %q or %q key", provider.ErrInvalid,
+				corev1.BasicAuthUsernameKey, corev1.BasicAuthPasswordKey)
+		}
+	}
 	updated := s.DeepCopy()
 	updated.Data = maps.Clone(data.Values)
 	updated.StringData = nil
@@ -167,7 +189,7 @@ func (p *Provider) get(ctx context.Context, ns, name string) (*corev1.Secret, er
 	if err != nil {
 		return nil, fmt.Errorf("get secret %s/%s: %w", ns, name, mapErr(err))
 	}
-	if s.Type != corev1.SecretTypeOpaque && s.Type != "" {
+	if !supported(s.Type) {
 		return nil, fmt.Errorf("%w: %s/%s has type %s", provider.ErrUnsupported, ns, name, s.Type)
 	}
 	return s, nil
@@ -196,6 +218,8 @@ func mapErr(err error) error {
 		return fmt.Errorf("%w: %w", provider.ErrConflict, err)
 	case apierrors.IsForbidden(err):
 		return fmt.Errorf("%w: %w", provider.ErrForbidden, err)
+	case apierrors.IsInvalid(err): // e.g. type-specific rules the API server enforces
+		return fmt.Errorf("%w: %w", provider.ErrInvalid, err)
 	}
 	return err
 }

@@ -106,6 +106,8 @@ Makefile
 - [x] Admin Audit page (`/admin/audit`): admin changes and secret updates persisted in `audit_events` with a
       target label snapshot; filters (user, secret, action, date range), keyset pagination; retention via
       `AUDIT_RETENTION_DAYS` (hourly prune, default 365 days); reveals and logins stay stdout-only
+- [x] `kubernetes.io/basic-auth` secrets can be imported, viewed and edited like Opaque ones (saving without both
+      `username` and `password` is rejected); TLS, docker-config and token secrets stay hidden
 
 ## Phase 7 — Deployment
 - [x] Helm chart `deploy/helm/secrets-ui`: Deployment (2 replicas), Service, ServiceAccount, PDB,

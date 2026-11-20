@@ -84,7 +84,7 @@ Admin only: import or un-import secrets, edit secret tags, manage roles and user
 1. **Import** (one page, two lists):
    - **Imported:** edit tags, un-import (removes it from the app only; the k8s Secret is **not** deleted).
      Show a "missing" status if the k8s Secret no longer exists.
-   - **Available:** not-yet-imported k8s Secrets (types `Opaque` only) in the allowed namespaces; assign tags, import.
+   - **Available:** not-yet-imported k8s Secrets (types `Opaque` and `kubernetes.io/basic-auth`) in the allowed namespaces; assign tags, import.
 3. **Roles:** create, rename, delete; set tags and permission; add or remove members.
 4. **Users:** list (email, name, roles, last login, status); assign or remove roles; disable or enable.
 5. **Tags:** created on the fly when typed on a role or secret; the list of existing tags is offered as autocomplete.
@@ -133,7 +133,8 @@ type SecretData struct { Values map[string][]byte; Version string }   // Version
 - Namespaces are limited by `ALLOWED_NAMESPACES=ns1,ns2` (required, no wildcard).
 - RBAC: a `Role` + `RoleBinding` **per allowed namespace** with `get, list, update` on `secrets`.
   No ClusterRole.
-- Only `Opaque` secrets are listed (no service-account tokens, TLS or docker-config secrets).
+- Only `Opaque` and `kubernetes.io/basic-auth` secrets are listed (no service-account tokens, TLS or docker-config
+  secrets). A basic-auth secret must keep a `username` or `password` key; saving without both is rejected.
 - **External secrets:** secrets managed by another tool are shown and marked as *external* with the
   manager's name (owner reference kind such as `ExternalSecret`/`SealedSecret`, or Helm, Argo CD, Flux).
   Changes made here may be overwritten by that tool, and the UI warns about it.

@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -46,6 +48,8 @@ func fixtures() []runtime.Object {
 			s.Labels = map[string]string{"app.kubernetes.io/managed-by": "Helm"}
 		}),
 		secret("kube-system", "hidden", corev1.SecretTypeOpaque, map[string]string{"X": "x"}),
+		secret("front", "web-auth", corev1.SecretTypeBasicAuth, map[string]string{"username": "u", "password": "p"}),
+		secret("back", "registry", corev1.SecretTypeDockerConfigJson, map[string]string{".dockerconfigjson": "{}"}),
 	}
 }
 
@@ -59,8 +63,8 @@ func TestList(t *testing.T) {
 	for _, s := range got {
 		names = append(names, s.Group+"/"+s.Name)
 	}
-	// Sorted; TLS and other-namespace secrets excluded.
-	if want := []string{"back/db", "front/api", "front/es"}; !slices.Equal(names, want) {
+	// Sorted; basic-auth included; TLS, docker config and other-namespace secrets excluded.
+	if want := []string{"back/db", "front/api", "front/es", "front/web-auth"}; !slices.Equal(names, want) {
 		t.Fatalf("names = %v, want %v", names, want)
 	}
 	byName := map[string]provider.SecretInfo{}
@@ -116,6 +120,7 @@ func TestGet(t *testing.T) {
 		{"missing", Ref("front", "nope"), provider.ErrNotFound},
 		{"namespace not allowed", Ref("kube-system", "hidden"), provider.ErrForbidden},
 		{"tls not supported", Ref("front", "tls"), provider.ErrUnsupported},
+		{"docker config not supported", Ref("back", "registry"), provider.ErrUnsupported},
 		{"wrong provider", provider.SecretRef{Provider: "aws", Locator: Ref("front", "api").Locator}, provider.ErrInvalid},
 		{"empty name", Ref("front", ""), provider.ErrInvalid},
 		{"extra locator key", provider.SecretRef{Provider: ID, Locator: map[string]string{"namespace": "front", "name": "api", "x": "y"}}, provider.ErrInvalid},
@@ -157,6 +162,57 @@ func TestUpdate(t *testing.T) {
 	}
 	if s.Labels["app.kubernetes.io/managed-by"] != "Helm" {
 		t.Fatal("metadata not preserved")
+	}
+}
+
+func TestUpdateBasicAuth(t *testing.T) {
+	p, cs := newProvider(fixtures()...)
+	ctx := t.Context()
+	ref := Ref("front", "web-auth")
+	tests := []struct {
+		name   string
+		values map[string]string
+		ok     bool
+	}{
+		{"change password", map[string]string{"username": "u", "password": "new"}, true},
+		{"password only", map[string]string{"password": "p2"}, true},
+		{"username only, extra key", map[string]string{"username": "u", "realm": "r"}, true},
+		{"neither username nor password", map[string]string{"realm": "r"}, false},
+		{"empty", map[string]string{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, err := p.Get(ctx, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.Values = map[string][]byte{}
+			for k, v := range tt.values {
+				d.Values[k] = []byte(v)
+			}
+			err = p.Update(ctx, ref, d)
+			if tt.ok != (err == nil) || (!tt.ok && !errors.Is(err, provider.ErrInvalid)) {
+				t.Fatalf("err = %v, want ok=%v", err, tt.ok)
+			}
+			s, _ := cs.CoreV1().Secrets("front").Get(ctx, "web-auth", metav1.GetOptions{})
+			if s.Type != corev1.SecretTypeBasicAuth {
+				t.Fatalf("type changed to %s", s.Type)
+			}
+			if tt.ok && len(s.Data) != len(tt.values) {
+				t.Fatalf("data = %v", s.Data)
+			}
+		})
+	}
+}
+
+func TestUpdateInvalidFromAPIServer(t *testing.T) {
+	p, cs := newProvider(fixtures()...)
+	cs.PrependReactor("update", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInvalid(schema.GroupKind{Kind: "Secret"}, "api", nil)
+	})
+	d, _ := p.Get(t.Context(), Ref("front", "api"))
+	if err := p.Update(t.Context(), Ref("front", "api"), d); !errors.Is(err, provider.ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
 	}
 }
 
