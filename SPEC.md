@@ -143,11 +143,21 @@ type SecretData struct { Values map[string][]byte; Version string }   // Version
 ## 7. Audit log
 
 - Written to **stdout** as structured JSON lines (`log/slog`), marked with `"audit": true`.
-- Fields: `ts`, `actor_email`, `actor_id`, `action`, `target_type`, `target_id`, `details`, `result`, `ip`.
+- Fields: `ts`, `actor_email`, `actor_id`, `action`, `target_type`, `target_id`, `target_label`, `details`, `result`, `ip`.
+  `target_label` is the target's display name at the time of the event (secret `namespace/name`, role name, user email).
 - Events: `login`, `login_denied`, `logout`, `secret.import`, `secret.unimport`, `secret.tags_update`,
   `secret.reveal`, `secret.update` (key names only), `role.*`, `user.role_assign`,
   `user.role_remove`, `user.disable`, `user.enable`.
 - **Never** includes secret values.
+- **Persisted in Postgres** (`audit_events`) for the admin **Audit** page (`/admin/audit`, nav link "Audit"):
+  `secret.update`, `secret.import`, `secret.unimport`, `secret.tags_update`, `role.create`/`update`/`delete`,
+  `user.role_assign`/`role_remove`, `user.disable`/`enable`. Reveals and sign-ins stay stdout-only.
+  A failed insert is logged as an error but does not fail the request (stdout remains the full trail).
+- The Audit page lists events newest first (50 per page, keyset pagination) with filters: user (actor email
+  substring), secret (`namespace/name` substring), action, and a UTC date range (inclusive). Details show key
+  names, tags and role names only.
+- Retention: events older than `AUDIT_RETENTION_DAYS` (default 365; `0` keeps them forever) are deleted hourly by
+  every replica (stateless, idempotent).
 
 ## 8. Tech stack
 
@@ -175,6 +185,7 @@ type SecretData struct { Values map[string][]byte; Version string }   // Version
 | `ALLOWED_NAMESPACES` | comma-separated k8s namespaces |
 | `KUBE_CONTEXT` | kubeconfig context; only used outside a cluster (local dev) |
 | `LOG_LEVEL` | default `info` |
+| `AUDIT_RETENTION_DAYS` | days to keep persisted audit events; default `365`, `0` = forever |
 | `LISTEN_ADDR` | default `:8080` |
 
 ## 10. Non-functional
@@ -193,4 +204,3 @@ type SecretData struct { Values map[string][]byte; Version string }   // Version
 - Multiple clusters or other providers (only the interface is ready).
 - Secret rotation or version history.
 - Public API or CLI.
-- Audit log stored in the DB or searchable in the UI.

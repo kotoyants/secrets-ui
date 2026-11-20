@@ -72,7 +72,7 @@ func newStore(t *testing.T) *Store {
 		t.Skip("database tests skipped (-short)")
 	}
 	_, err := testPool.Exec(t.Context(), `
-		TRUNCATE users, secrets RESTART IDENTITY CASCADE;
+		TRUNCATE users, secrets, audit_events RESTART IDENTITY CASCADE;
 		DELETE FROM roles WHERE NOT builtin;`)
 	if err != nil {
 		t.Fatalf("reset db: %v", err)

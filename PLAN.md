@@ -103,6 +103,9 @@ Makefile
 - [x] Key/value | Plaintext tabs on the view and edit pages (like AWS Secrets Manager): the whole secret as one
       JSON or dotenv document; opening Plaintext reveals all (audited); saving replaces the whole secret; switching
       format on the edit page converts server-side and keeps edits; disabled for secrets with binary values
+- [x] Admin Audit page (`/admin/audit`): admin changes and secret updates persisted in `audit_events` with a
+      target label snapshot; filters (user, secret, action, date range), keyset pagination; retention via
+      `AUDIT_RETENTION_DAYS` (hourly prune, default 365 days); reveals and logins stay stdout-only
 
 ## Phase 7 — Deployment
 - [x] Helm chart `deploy/helm/secrets-ui`: Deployment (2 replicas), Service, ServiceAccount, PDB,
@@ -126,5 +129,4 @@ Makefile
 
 ## Later (not v1)
 - More providers (AWS Secrets Manager, GCP, Vault), multiple clusters
-- Audit log in the DB with a UI
 - Creating secrets in the provider

@@ -44,6 +44,9 @@ type accessible struct {
 	CanWrite bool
 }
 
+// label is the secret's display name for audit events.
+func (s *accessible) label() string { return describeLabel(s.Provider, s.Ref) }
+
 // loadSecret loads secret {id} and checks read access. Secrets the user cannot
 // read are reported as not found, so their existence is not revealed.
 func (h *handlers) loadSecret(r *http.Request) (*accessible, error) {
@@ -228,7 +231,7 @@ func (h *handlers) secretView(w http.ResponseWriter, r *http.Request) {
 			values[k.Key], names[i] = []byte(k.Value), k.Key
 		}
 		page.Text = formatText(page.Format, values)
-		h.logAudit(r, audit.ActionSecretReveal, "secret", idStr(s.Row.ID), map[string]any{
+		h.logAudit(r, audit.ActionSecretReveal, "secret", idStr(s.Row.ID), s.label(), map[string]any{
 			"ref": s.Ref.String(), "keys": names, "view": "plaintext",
 		})
 	}
@@ -288,7 +291,7 @@ func (h *handlers) secretReveal(w http.ResponseWriter, r *http.Request) {
 	if cp {
 		attrs["copy"] = true
 	}
-	h.logAudit(r, audit.ActionSecretReveal, "secret", idStr(s.Row.ID), attrs)
+	h.logAudit(r, audit.ActionSecretReveal, "secret", idStr(s.Row.ID), s.label(), attrs)
 
 	switch {
 	case cp:
@@ -368,7 +371,7 @@ func (h *handlers) secretEditForm(w http.ResponseWriter, r *http.Request) {
 		page.Plaintext = true
 		page.Format = parseTextFormat(r.URL.Query().Get("format"))
 		page.Text = formatText(page.Format, data.Values)
-		h.logAudit(r, audit.ActionSecretReveal, "secret", idStr(s.Row.ID), map[string]any{
+		h.logAudit(r, audit.ActionSecretReveal, "secret", idStr(s.Row.ID), s.label(), map[string]any{
 			"ref": s.Ref.String(), "keys": data.SortedKeys(), "view": "plaintext", "for": "edit",
 		})
 	}
@@ -466,7 +469,7 @@ func (h *handlers) secretSave(w http.ResponseWriter, r *http.Request) {
 // saved audits a successful update and redirects to the secret.
 func (h *handlers) saved(w http.ResponseWriter, r *http.Request, s *accessible, current *provider.SecretData,
 	changed, added, removed []string) {
-	h.logAudit(r, audit.ActionSecretUpdate, "secret", idStr(s.Row.ID), map[string]any{
+	h.logAudit(r, audit.ActionSecretUpdate, "secret", idStr(s.Row.ID), s.label(), map[string]any{
 		"ref": s.Ref.String(), "changed": changed, "added": added, "removed": removed,
 	})
 	msg := "Secret saved."

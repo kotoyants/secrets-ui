@@ -53,6 +53,20 @@ func (ns NullRolePermission) Value() (driver.Value, error) {
 	return string(ns.RolePermission), nil
 }
 
+type AuditEvent struct {
+	ID          int64
+	Ts          time.Time
+	ActorID     *int64
+	ActorEmail  string
+	Action      string
+	TargetType  string
+	TargetID    string
+	TargetLabel string
+	Result      string
+	Ip          string
+	Details     json.RawMessage
+}
+
 type Role struct {
 	ID         int64
 	Name       string

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,6 +27,8 @@ type Config struct {
 	AllowedNamespaces  []string
 	KubeContext        string // only used outside a cluster (local development)
 	LogLevel           slog.Level
+	// AuditRetention is how long persisted audit events are kept; 0 keeps them forever.
+	AuditRetention time.Duration
 }
 
 // Load reads configuration using getenv (typically os.Getenv) and validates it.
@@ -90,6 +93,11 @@ func Load(getenv func(string) string) (*Config, error) {
 		}
 	}
 
+	if days, err := strconv.Atoi(withDefault(getenv("AUDIT_RETENTION_DAYS"), "365")); err != nil || days < 0 {
+		errs = append(errs, errors.New("AUDIT_RETENTION_DAYS must be a non-negative integer (0 keeps events forever)"))
+	} else {
+		cfg.AuditRetention = time.Duration(days) * 24 * time.Hour
+	}
 	if err := cfg.LogLevel.UnmarshalText([]byte(withDefault(getenv("LOG_LEVEL"), "info"))); err != nil {
 		errs = append(errs, fmt.Errorf("LOG_LEVEL: %w", err))
 	}

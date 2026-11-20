@@ -53,6 +53,26 @@ func TestLoadValid(t *testing.T) {
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Errorf("LogLevel = %v", cfg.LogLevel)
 	}
+	if cfg.AuditRetention != 365*24*time.Hour {
+		t.Errorf("AuditRetention = %v, want 365 days", cfg.AuditRetention)
+	}
+}
+
+func TestLoadAuditRetention(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  time.Duration
+	}{{"30", 30 * 24 * time.Hour}, {"0", 0}, {" 7 ", 7 * 24 * time.Hour}} {
+		env := validEnv()
+		env["AUDIT_RETENTION_DAYS"] = tt.value
+		cfg, err := Load(getenv(env))
+		if err != nil {
+			t.Fatalf("%q: %v", tt.value, err)
+		}
+		if cfg.AuditRetention != tt.want {
+			t.Errorf("%q: AuditRetention = %v, want %v", tt.value, cfg.AuditRetention, tt.want)
+		}
+	}
 }
 
 func TestLoadInvalid(t *testing.T) {
@@ -71,6 +91,8 @@ func TestLoadInvalid(t *testing.T) {
 		{"no namespaces", "ALLOWED_NAMESPACES", " , ", "ALLOWED_NAMESPACES is required"},
 		{"wildcard namespace", "ALLOWED_NAMESPACES", "a,*", "wildcard"},
 		{"bad log level", "LOG_LEVEL", "loud", "LOG_LEVEL"},
+		{"bad retention", "AUDIT_RETENTION_DAYS", "1y", "AUDIT_RETENTION_DAYS"},
+		{"negative retention", "AUDIT_RETENTION_DAYS", "-1", "AUDIT_RETENTION_DAYS"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

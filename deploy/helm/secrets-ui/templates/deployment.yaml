@@ -58,6 +58,8 @@ spec:
               value: {{ .Values.config.sessionTTL | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.config.logLevel | quote }}
+            - name: AUDIT_RETENTION_DAYS
+              value: {{ .Values.config.auditRetentionDays | quote }}
           envFrom:
             - secretRef:
                 name: {{ .Values.existingSecret }}

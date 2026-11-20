@@ -1,0 +1,46 @@
+{{define "content"}}
+{{with .Data}}
+<h1>Audit</h1>
+<p class="muted">Changes to secrets, roles and users, newest first. Secret values are never recorded; reveals and
+sign-ins are only in the server log.</p>
+
+<form method="get" action="/admin/audit" class="filters" aria-label="Filter audit events">
+  <fieldset class="grid">
+    <input type="search" name="user" value="{{.Filter.User}}" placeholder="User email" aria-label="User email">
+    <input type="search" name="secret" value="{{.Filter.Secret}}" placeholder="Secret" aria-label="Secret">
+    <select name="action" aria-label="Action">
+      <option value="">All actions</option>
+      {{$a := .Filter.Action}}{{range .Actions}}<option value="{{.}}" {{if eq . $a}}selected{{end}}>{{.}}</option>{{end}}
+    </select>
+    <input type="date" name="from" value="{{.Filter.From}}" aria-label="From date (UTC)" title="From (UTC)">
+    <input type="date" name="to" value="{{.Filter.To}}" aria-label="To date (UTC)" title="To (UTC, inclusive)">
+    <button type="submit" class="secondary">Filter</button>
+  </fieldset>
+</form>
+{{with .Error}}<p class="flash flash-error" role="alert">{{.}}</p>{{end}}
+{{if .Filtered}}<p><a href="/admin/audit">Reset filters / newest</a></p>{{end}}
+
+<div class="overflow-auto">
+<table class="striped audit">
+  <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Target</th><th>Details</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+    <tr>
+      <td>{{time .Event.Ts}}</td>
+      <td>{{if .Event.ActorID}}<a href="/admin/users/{{.Event.ActorID}}">{{.Event.ActorEmail}}</a>{{else}}{{.Event.ActorEmail}}{{end}}</td>
+      <td><code>{{.Event.Action}}</code>{{if ne .Event.Result "success"}} <span class="status-bad">{{.Event.Result}}</span>{{end}}</td>
+      <td>
+        <span class="muted">{{.Event.TargetType}}</span>
+        {{if .Link}}<a href="{{.Link}}">{{or .Event.TargetLabel .Event.TargetID}}</a>{{else}}{{or .Event.TargetLabel .Event.TargetID}}{{end}}
+      </td>
+      <td>{{range .Details}}<div><span class="muted">{{.Key}}:</span> {{.Value}}</div>{{end}}</td>
+    </tr>
+  {{else}}
+    <tr><td colspan="5">No events.</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{with .NextURL}}<p><a href="{{.}}" role="button" class="secondary outline small">Older events</a></p>{{end}}
+{{end}}
+{{end}}

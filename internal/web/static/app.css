@@ -110,3 +110,7 @@ textarea.plaintext {
   min-height: 8lh;
   max-height: 40lh;
 }
+
+/* Audit page: compact rows, details wrap under each other. */
+.audit td { vertical-align: top; font-size: 0.875rem; }
+.audit td:first-child { white-space: nowrap; }

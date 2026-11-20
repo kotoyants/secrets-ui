@@ -45,6 +45,8 @@ func (h *handlers) adminRoutes(r chi.Router) {
 
 	r.Get("/import", h.adminImport)
 	r.Post("/import", h.adminImportSecret)
+
+	r.Get("/audit", h.adminAudit)
 }
 
 // ---- helpers ---------------------------------------------------------------
@@ -65,12 +67,37 @@ func formID(r *http.Request, name string) (int64, error) {
 	return id, nil
 }
 
-func (h *handlers) logAudit(r *http.Request, action, targetType, targetID string, details map[string]any) {
+// logAudit records a successful action by the current user. label is the target's
+// display name (secret "namespace/name", role name, user email).
+func (h *handlers) logAudit(r *http.Request, action, targetType, targetID, label string, details map[string]any) {
 	p := auth.FromContext(r.Context())
 	h.audit.Log(r.Context(), audit.Event{
 		ActorID: p.User.ID, ActorEmail: p.User.Email, Action: action,
-		TargetType: targetType, TargetID: targetID, IP: audit.ClientIP(r), Details: details,
+		TargetType: targetType, TargetID: targetID, TargetLabel: label, IP: audit.ClientIP(r), Details: details,
 	})
+}
+
+// secretLabel is the display name of an imported secret for audit events
+// ("namespace/name" for Kubernetes), or the raw reference if it can't be described.
+func (h *handlers) secretLabel(providerID string, locator []byte) string {
+	loc, err := decodeLocator(locator)
+	if err != nil {
+		return ""
+	}
+	ref := provider.SecretRef{Provider: providerID, Locator: loc}
+	p, err := h.providers.Get(providerID)
+	if err != nil {
+		return ref.String()
+	}
+	return describeLabel(p, ref)
+}
+
+func describeLabel(p provider.Provider, ref provider.SecretRef) string {
+	group, name := p.Describe(ref)
+	if group == "" {
+		return name
+	}
+	return group + "/" + name
 }
 
 func idStr(id int64) string { return strconv.FormatInt(id, 10) }
@@ -210,7 +237,8 @@ func (h *handlers) adminUserRemoveRole(w http.ResponseWriter, r *http.Request) {
 
 func (h *handlers) assignRole(r *http.Request, userID, roleID int64) error {
 	ctx := r.Context()
-	if _, err := h.store.GetUserByID(ctx, userID); err != nil {
+	u, err := h.store.GetUserByID(ctx, userID)
+	if err != nil {
 		return err
 	}
 	role, err := h.store.GetRole(ctx, roleID)
@@ -220,11 +248,20 @@ func (h *handlers) assignRole(r *http.Request, userID, roleID int64) error {
 	if err := h.store.AddUserRole(ctx, db.AddUserRoleParams{UserID: userID, RoleID: roleID}); err != nil {
 		return err
 	}
-	h.logAudit(r, audit.ActionUserRoleAssign, "user", idStr(userID), map[string]any{"role_id": roleID, "role": role.Name})
+	h.logAudit(r, audit.ActionUserRoleAssign, "user", idStr(userID), u.Email, map[string]any{"role_id": roleID, "role": role.Name})
 	return nil
 }
 
 func (h *handlers) unassignRole(r *http.Request, userID, roleID int64) error {
+	// Loaded first for the audit event (names survive later renames and deletes).
+	u, err := h.store.GetUserByID(r.Context(), userID)
+	if err != nil {
+		return err
+	}
+	role, err := h.store.GetRole(r.Context(), roleID)
+	if err != nil {
+		return err
+	}
 	self, err := h.isSelfAdminRole(r, userID, roleID)
 	if err != nil {
 		return err
@@ -239,7 +276,8 @@ func (h *handlers) unassignRole(r *http.Request, userID, roleID int64) error {
 	if n == 0 {
 		return store.ErrNotFound
 	}
-	h.logAudit(r, audit.ActionUserRoleRemove, "user", idStr(userID), map[string]any{"role_id": roleID})
+	h.logAudit(r, audit.ActionUserRoleRemove, "user", idStr(userID), u.Email,
+		map[string]any{"role_id": roleID, "role": role.Name})
 	return nil
 }
 
@@ -259,12 +297,16 @@ func (h *handlers) adminUserSetDisabled(disabled bool) http.HandlerFunc {
 			h.done(w, r, back, "", errorf("You cannot disable yourself."))
 			return
 		}
-		n, err := h.store.SetUserDisabled(r.Context(), db.SetUserDisabledParams{ID: id, Disabled: disabled})
+		u, err := h.store.GetUserByID(r.Context(), id)
+		var n int64
+		if err == nil {
+			n, err = h.store.SetUserDisabled(r.Context(), db.SetUserDisabledParams{ID: id, Disabled: disabled})
+		}
 		if err == nil && n == 0 {
 			err = store.ErrNotFound
 		}
 		if err == nil {
-			h.logAudit(r, action, "user", idStr(id), nil)
+			h.logAudit(r, action, "user", idStr(id), u.Email, nil)
 		}
 		h.done(w, r, back, msg, err)
 	}
@@ -309,7 +351,7 @@ func (h *handlers) adminRoleCreate(w http.ResponseWriter, r *http.Request) {
 		h.done(w, r, "/admin/roles", "", err)
 		return
 	}
-	h.logAudit(r, audit.ActionRoleCreate, "role", idStr(id), map[string]any{"name": name, "permission": perm, "tags": t})
+	h.logAudit(r, audit.ActionRoleCreate, "role", idStr(id), name, map[string]any{"name": name, "permission": perm, "tags": t})
 	h.done(w, r, "/admin/roles/"+idStr(id), "Role created.", nil)
 }
 
@@ -382,7 +424,7 @@ func (h *handlers) adminRoleUpdate(w http.ResponseWriter, r *http.Request) {
 		err = h.store.UpdateRoleWithTags(r.Context(), id, name, perm, t)
 	}
 	if err == nil {
-		h.logAudit(r, audit.ActionRoleUpdate, "role", idStr(id), map[string]any{"name": name, "permission": perm, "tags": t})
+		h.logAudit(r, audit.ActionRoleUpdate, "role", idStr(id), name, map[string]any{"name": name, "permission": perm, "tags": t})
 	}
 	h.done(w, r, "/admin/roles/"+idStr(id), "Role saved.", err)
 }
@@ -404,7 +446,7 @@ func (h *handlers) adminRoleDelete(w http.ResponseWriter, r *http.Request) {
 		h.done(w, r, "/admin/roles/"+idStr(id), "", err)
 		return
 	}
-	h.logAudit(r, audit.ActionRoleDelete, "role", idStr(id), map[string]any{"name": role.Name})
+	h.logAudit(r, audit.ActionRoleDelete, "role", idStr(id), role.Name, map[string]any{"name": role.Name})
 	h.done(w, r, "/admin/roles", "Role deleted.", nil)
 }
 
@@ -560,7 +602,7 @@ func (h *handlers) adminImportSecret(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		h.logAudit(r, audit.ActionSecretImport, "secret", idStr(id), map[string]any{"ref": ref.String(), "tags": t})
+		h.logAudit(r, audit.ActionSecretImport, "secret", idStr(id), describeLabel(p, ref), map[string]any{"ref": ref.String(), "tags": t})
 		return nil
 	}()
 	h.done(w, r, "/admin/import", "Secret imported.", err)
@@ -573,11 +615,16 @@ func (h *handlers) adminSecretUpdateTags(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	t, err := tags.Parse(r.PostFormValue("tags"))
+	var sec db.GetSecretRow
+	if err == nil {
+		sec, err = h.store.GetSecret(r.Context(), id)
+	}
 	if err == nil {
 		err = h.store.SetSecretTags(r.Context(), id, t)
 	}
 	if err == nil {
-		h.logAudit(r, audit.ActionSecretTagsUpdate, "secret", idStr(id), map[string]any{"tags": t})
+		h.logAudit(r, audit.ActionSecretTagsUpdate, "secret", idStr(id), h.secretLabel(sec.Provider, sec.Locator),
+			map[string]any{"tags": t})
 	}
 	h.done(w, r, "/admin/import", "Tags saved.", err)
 }
@@ -593,7 +640,7 @@ func (h *handlers) adminSecretDelete(w http.ResponseWriter, r *http.Request) {
 		_, err = h.store.DeleteSecret(r.Context(), id)
 	}
 	if err == nil {
-		h.logAudit(r, audit.ActionSecretUnimport, "secret", idStr(id),
+		h.logAudit(r, audit.ActionSecretUnimport, "secret", idStr(id), h.secretLabel(sec.Provider, sec.Locator),
 			map[string]any{"provider": sec.Provider, "locator": string(sec.Locator)})
 	}
 	h.done(w, r, "/admin/import", "Secret removed from the app (it still exists in its storage).", err)

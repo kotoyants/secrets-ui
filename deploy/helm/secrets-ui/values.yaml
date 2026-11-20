@@ -30,6 +30,8 @@ config:
   allowedNamespaces: []
   sessionTTL: 8h
   logLevel: info
+  # Days to keep audit events (admin Audit page); 0 keeps them forever.
+  auditRetentionDays: 365
 
 # Secret (not managed by this chart) with DATABASE_URL, GOOGLE_CLIENT_ID,
 # GOOGLE_CLIENT_SECRET and SESSION_SECRET.

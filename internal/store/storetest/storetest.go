@@ -56,7 +56,7 @@ func New(t *testing.T) *store.Store {
 		t.Fatalf("test database: %v", initErr)
 	}
 	if _, err := pool.Exec(t.Context(), `
-		TRUNCATE users, secrets RESTART IDENTITY CASCADE;
+		TRUNCATE users, secrets, audit_events RESTART IDENTITY CASCADE;
 		DELETE FROM roles WHERE NOT builtin;`); err != nil {
 		t.Fatalf("reset test database: %v", err)
 	}

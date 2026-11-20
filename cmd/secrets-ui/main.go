@@ -97,7 +97,8 @@ func serve(ctx context.Context) error {
 	}
 	st := store.New(pool)
 
-	auditLog := audit.New(log)
+	auditLog := audit.New(log).WithStore(st)
+	go audit.RunRetention(ctx, st, cfg.AuditRetention, time.Hour, log)
 
 	// ctx (not startCtx) keeps the OIDC key set refreshable for the server's lifetime.
 	authSvc, err := auth.New(ctx, auth.Config{

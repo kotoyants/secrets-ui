@@ -58,7 +58,7 @@ func newFullApp(t *testing.T) *fullApp {
 
 	auditBuf := &bytes.Buffer{}
 	log := slog.New(slog.DiscardHandler)
-	auditLog := audit.New(slog.New(slog.NewJSONHandler(auditBuf, nil)))
+	auditLog := audit.New(slog.New(slog.NewJSONHandler(auditBuf, nil))).WithStore(st)
 	svc, err := auth.New(t.Context(), auth.Config{
 		Issuer: idp.Issuer(), ClientID: "client-id", ClientSecret: "s", BaseURL: base,
 		SessionSecret: []byte(strings.Repeat("k", 32)), SessionTTL: time.Hour,

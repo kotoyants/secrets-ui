@@ -84,7 +84,7 @@ var pages = map[string]*template.Template{}
 func init() {
 	for _, name := range []string{
 		"login", "error", "secrets", "secret", "secret_edit",
-		"admin_users", "admin_user", "admin_roles", "admin_role", "admin_import",
+		"admin_users", "admin_user", "admin_roles", "admin_role", "admin_import", "admin_audit",
 	} {
 		pages[name] = template.Must(template.New("").Funcs(funcs).ParseFS(templateFS,
 			"templates/layout.html", "templates/"+name+".html"))

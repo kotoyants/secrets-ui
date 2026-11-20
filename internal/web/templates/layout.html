@@ -22,6 +22,7 @@
         <li><a href="/admin/users" {{if eq $.Nav "users"}}aria-current="page"{{end}}>Users</a></li>
         <li><a href="/admin/roles" {{if eq $.Nav "roles"}}aria-current="page"{{end}}>Roles</a></li>
         <li><a href="/admin/import" {{if eq $.Nav "import"}}aria-current="page"{{end}}>Import</a></li>
+        <li><a href="/admin/audit" {{if eq $.Nav "audit"}}aria-current="page"{{end}}>Audit</a></li>
         {{end}}
         <li><small class="muted">{{.User.Email}}</small></li>
         <li>
