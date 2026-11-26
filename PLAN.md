@@ -125,7 +125,7 @@ Makefile
       on main the image is built only for `feat`/`fix` commits (Conventional Commits)
 - [x] Releases from main: a new `Chart.yaml` version (no `vX.Y.Z` tag yet) builds the `X.Y.Z` image, publishes the
       chart and creates the git tag in the same run (no tag trigger, one run per release)
-- [ ] First deploy to DOKS (namespaces, DB, Secret, Ingress via Terraform; then `helm upgrade --install`)
+- [x] First deploy to DOKS (namespaces, DB, Secret, Ingress via Terraform; then `helm upgrade --install`)
 
 ## Phase 8 — Hardening & polish
 - [ ] Rate limiting on login and reveal
