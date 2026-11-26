@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -87,7 +88,9 @@ type listRow struct {
 
 type listPage struct {
 	Secrets  []listRow
-	Total    int // readable secrets before filtering
+	Tree     []listGroup // Secrets grouped by namespace, for the tree view
+	View     string      // "tree" (default) or "table"
+	Total    int         // readable secrets before filtering
 	Groups   []string
 	AllTags  []string
 	Tag      string
@@ -106,7 +109,10 @@ func (h *handlers) secretList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	page := listPage{Tag: q.Get("tag"), Group: q.Get("ns"), Query: strings.TrimSpace(q.Get("q"))}
+	page := listPage{Tag: q.Get("tag"), Group: q.Get("ns"), Query: strings.TrimSpace(q.Get("q")), View: "tree"}
+	if q.Get("view") == "table" {
+		page.View = "table"
+	}
 	for _, ro := range p.Roles {
 		if len(ro.Tags) > 0 || (ro.Builtin && ro.Name == store.RoleAdmin) {
 			page.HasRoles = true
@@ -140,9 +146,39 @@ func (h *handlers) secretList(w http.ResponseWriter, r *http.Request) {
 	slices.SortFunc(page.Secrets, func(a, b listRow) int {
 		return cmp.Or(cmp.Compare(a.Group, b.Group), cmp.Compare(a.Name, b.Name))
 	})
+	for _, row := range page.Secrets { // sorted by group, so each group is contiguous
+		if n := len(page.Tree); n == 0 || page.Tree[n-1].Name != row.Group {
+			page.Tree = append(page.Tree, listGroup{Name: row.Group})
+		}
+		g := &page.Tree[len(page.Tree)-1]
+		g.Secrets = append(g.Secrets, row)
+	}
 	page.Groups = slices.Sorted(maps.Keys(groups))
 	page.AllTags = slices.Sorted(maps.Keys(allTags))
 	h.render(w, r, http.StatusOK, "secrets", pageData{Nav: "home", Data: page})
+}
+
+// listGroup is one namespace (provider group) of the tree view.
+type listGroup struct {
+	Name    string
+	Secrets []listRow
+}
+
+// ViewURL is the list URL with the current filters in view v ("tree" or "table").
+func (p listPage) ViewURL(v string) string {
+	q := url.Values{}
+	for k, val := range map[string]string{"q": p.Query, "ns": p.Group, "tag": p.Tag} {
+		if val != "" {
+			q.Set(k, val)
+		}
+	}
+	if v != "tree" {
+		q.Set("view", v)
+	}
+	if len(q) == 0 {
+		return "/"
+	}
+	return "/?" + q.Encode()
 }
 
 // ---- view & reveal ---------------------------------------------------------
@@ -165,14 +201,19 @@ type secretPage struct {
 	Missing   bool
 	Keys      []keyView
 	HasBinary bool // some value is binary, so the plaintext view is unavailable
+	HasFields bool // some value is a JSON/JS config, so the Fields tab is available
 
 	// Plaintext view (?view=plaintext): the whole secret as one document.
 	Plaintext bool
 	Format    textFormat
 	Text      string
+
+	// Fields view (?view=fields): each JSON/JS config value field by field.
+	Fields bool
+	Docs   []fieldDoc
 }
 
-// BaseURL is the page URL, for the Key/value | Plaintext tabs.
+// BaseURL is the page URL, for the Key/value | Plaintext | Fields tabs.
 func (p secretPage) BaseURL() string { return "/secrets/" + idStr(p.ID) }
 
 // displayValue returns v as text, or base64 if it is binary.
@@ -199,6 +240,9 @@ func (h *handlers) buildSecretPage(r *http.Request, s *accessible, reveal func(k
 	for i, k := range data.SortedKeys() {
 		kv := keyView{Index: i, Key: k, Binary: !utf8.Valid(data.Values[k])}
 		page.HasBinary = page.HasBinary || kv.Binary
+		if !kv.Binary && !page.HasFields {
+			_, page.HasFields = parseStructured(string(data.Values[k]))
+		}
 		if reveal != nil && reveal(k) {
 			kv.Revealed = true
 			kv.Value, _ = displayValue(data.Values[k])
@@ -208,19 +252,33 @@ func (h *handlers) buildSecretPage(r *http.Request, s *accessible, reveal func(k
 	return page, nil
 }
 
-// secretView renders a secret with masked values, or with ?view=plaintext the
-// whole secret as one revealed (and audited) document in ?format=json|env.
+// secretView renders a secret with masked values, with ?view=plaintext the
+// whole secret as one revealed (and audited) document in ?format=json|env, or with
+// ?view=fields its JSON/JS config values field by field (revealed and audited).
 func (h *handlers) secretView(w http.ResponseWriter, r *http.Request) {
 	s, err := h.loadSecret(r)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	plaintext := r.URL.Query().Get("view") == "plaintext"
-	page, err := h.buildSecretPage(r, s, func(string) bool { return plaintext })
+	view := r.URL.Query().Get("view")
+	plaintext, fields := view == "plaintext", view == "fields"
+	page, err := h.buildSecretPage(r, s, func(string) bool { return plaintext || fields })
 	if err != nil {
 		h.fail(w, r, err)
 		return
+	}
+	if fields && page.HasFields {
+		values := make(map[string][]byte, len(page.Keys))
+		for _, k := range page.Keys {
+			if !k.Binary {
+				values[k.Key] = []byte(k.Value)
+			}
+		}
+		page.Fields, page.Docs = true, buildFieldDocs(values)
+		h.logAudit(r, audit.ActionSecretReveal, "secret", idStr(s.Row.ID), s.label(), map[string]any{
+			"ref": s.Ref.String(), "keys": docKeys(page.Docs), "view": "fields",
+		})
 	}
 	if plaintext && !page.Missing && !page.HasBinary {
 		page.Plaintext = true
@@ -336,11 +394,16 @@ type editPage struct {
 	Keys      []editKey
 	NewRows   []int
 	HasBinary bool // some value is binary, so plaintext editing is unavailable
+	HasFields bool // some value is a JSON/JS config, so the Fields tab is available
 
 	// Plaintext editing (?view=plaintext): the whole secret as one document.
 	Plaintext bool
 	Format    textFormat
 	Text      string
+
+	// Fields editing (?view=fields): each JSON/JS config value field by field.
+	Fields bool
+	Docs   []fieldDoc
 }
 
 func (h *handlers) loadWritable(w http.ResponseWriter, r *http.Request) (*accessible, *provider.SecretData, bool) {
@@ -367,6 +430,12 @@ func (h *handlers) secretEditForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := newEditPage(s, data)
+	if r.URL.Query().Get("view") == "fields" && page.HasFields {
+		page.Fields, page.Docs = true, buildFieldDocs(textValues(data.Values))
+		h.logAudit(r, audit.ActionSecretReveal, "secret", idStr(s.Row.ID), s.label(), map[string]any{
+			"ref": s.Ref.String(), "keys": docKeys(page.Docs), "view": "fields", "for": "edit",
+		})
+	}
 	if r.URL.Query().Get("view") == "plaintext" && !page.HasBinary {
 		page.Plaintext = true
 		page.Format = parseTextFormat(r.URL.Query().Get("format"))
@@ -378,7 +447,7 @@ func (h *handlers) secretEditForm(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, http.StatusOK, "secret_edit", pageData{Nav: "home", Data: page})
 }
 
-// BaseURL is the page URL, for the Key/value | Plaintext tabs.
+// BaseURL is the page URL, for the Key/value | Plaintext | Fields tabs.
 func (p editPage) BaseURL() string { return "/secrets/" + idStr(p.ID) + "/edit" }
 
 func newEditPage(s *accessible, data *provider.SecretData) editPage {
@@ -386,6 +455,9 @@ func newEditPage(s *accessible, data *provider.SecretData) editPage {
 	for i, k := range data.SortedKeys() {
 		bin := !utf8.Valid(data.Values[k])
 		page.HasBinary = page.HasBinary || bin
+		if !bin && !page.HasFields {
+			_, page.HasFields = parseStructured(string(data.Values[k]))
+		}
 		page.Keys = append(page.Keys, editKey{Index: i, Key: k, Binary: bin})
 	}
 	for i := range newKeyRows {
@@ -406,8 +478,12 @@ func (h *handlers) secretSave(w http.ResponseWriter, r *http.Request) {
 		h.done(w, r, back+"/edit", "", errorf("Invalid form."))
 		return
 	}
-	if r.PostForm.Get("view") == "plaintext" {
+	switch r.PostForm.Get("view") {
+	case "plaintext":
 		h.savePlaintext(w, r, s, current)
+		return
+	case "fields":
+		h.saveFields(w, r, s, current)
 		return
 	}
 	version := r.PostForm.Get("version")
@@ -463,12 +539,12 @@ func (h *handlers) secretSave(w http.ResponseWriter, r *http.Request) {
 		h.done(w, r, back+"/edit", "", err)
 		return
 	}
-	h.saved(w, r, s, current, changed, added, removed)
+	h.saved(w, r, s, current, changed, added, removed, false)
 }
 
-// saved audits a successful update and redirects to the secret.
+// saved audits a successful update and redirects to the secret (to the Fields tab if fields is set).
 func (h *handlers) saved(w http.ResponseWriter, r *http.Request, s *accessible, current *provider.SecretData,
-	changed, added, removed []string) {
+	changed, added, removed []string, fields bool) {
 	h.logAudit(r, audit.ActionSecretUpdate, "secret", idStr(s.Row.ID), s.label(), map[string]any{
 		"ref": s.Ref.String(), "changed": changed, "added": added, "removed": removed,
 	})
@@ -476,7 +552,11 @@ func (h *handlers) saved(w http.ResponseWriter, r *http.Request, s *accessible, 
 	if current.ManagedBy != "" {
 		msg += " Note: it is managed by " + current.ManagedBy + ", which may overwrite your change."
 	}
-	h.done(w, r, "/secrets/"+idStr(s.Row.ID), msg, nil)
+	back := "/secrets/" + idStr(s.Row.ID)
+	if fields {
+		back += "?view=fields"
+	}
+	h.done(w, r, back, msg, nil)
 }
 
 // savePlaintext applies the plaintext edit form: the document replaces the whole
@@ -539,5 +619,5 @@ func (h *handlers) savePlaintext(w http.ResponseWriter, r *http.Request, s *acce
 		retry(err)
 		return
 	}
-	h.saved(w, r, s, current, changed, added, removed)
+	h.saved(w, r, s, current, changed, added, removed, false)
 }

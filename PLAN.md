@@ -108,6 +108,9 @@ Makefile
       `AUDIT_RETENTION_DAYS` (hourly prune, default 365 days); reveals and logins stay stdout-only
 - [x] `kubernetes.io/basic-auth` secrets can be imported, viewed and edited like Opaque ones (saving without both
       `username` and `password` is rejected); TLS, docker-config and token secrets stay hidden
+- [x] Secrets list Tree view (default, one collapsible block per namespace) with a Tree | Table toggle
+- [x] Fields tab: JSON and `window.X = {...};` JS config values edited field by field (flat paths, values only,
+      in-place rewrite keeps order/formatting/wrapper; types preserved)
 
 ## Phase 7 — Deployment
 - [x] Helm chart `deploy/helm/secrets-ui`: Deployment (2 replicas), Service, ServiceAccount, PDB,

@@ -111,6 +111,20 @@ textarea.plaintext {
   max-height: 40lh;
 }
 
+/* Secrets list tree: one collapsible block per namespace; fixed column widths keep the blocks aligned. */
+.tree details { margin-bottom: 0.5rem; }
+.tree summary { padding: 0.4rem 0; }
+.tree table { table-layout: fixed; margin-bottom: 0.5rem; }
+.tree td:first-child { padding-left: 1.5rem; }
+.tree .c-name { width: 45%; }
+.tree .c-tags { width: 35%; }
+.tree .c-access { width: 20%; }
+
+/* Fields tab: field path | value (the value column takes the rest, unlike the key/value tables). */
+.field-doc { margin-top: var(--pico-spacing); --pico-font-size: 1.1rem; }
+.kv.fields td:last-child, .kv.fields th:last-child { text-align: left; width: auto; }
+.kv.fields td:first-child label { margin: 0; }
+
 /* Audit page: compact rows, details wrap under each other. */
 .audit td { vertical-align: top; font-size: 0.875rem; }
 .audit td:first-child { white-space: nowrap; }

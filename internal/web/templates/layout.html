@@ -42,16 +42,20 @@
 </html>
 {{end}}
 
-{{/* Key/value | Plaintext tabs of the secret view and edit pages (data: secretPage or editPage).
-     Switching is a plain link: unsaved edits are discarded. */}}
+{{/* Key/value | Plaintext | Fields tabs of the secret view and edit pages (data: secretPage or editPage).
+     Fields appears only when some value is a JSON/JS config. Switching is a plain link: unsaved edits are discarded. */}}
 {{define "view-tabs"}}
 {{$base := .BaseURL}}
 <div class="tabs">
-  <a href="{{$base}}"{{if not .Plaintext}} aria-current="page"{{end}}>Key/value</a>
+  <a href="{{$base}}"{{if not (or .Plaintext .Fields)}} aria-current="page"{{end}}>Key/value</a>
   {{if .HasBinary}}
   <span class="disabled" title="This secret has binary values, which can't be shown as plaintext.">Plaintext</span>
   {{else}}
   <a href="{{$base}}?view=plaintext&amp;format={{or .Format "json"}}"{{if .Plaintext}} aria-current="page"{{end}}>Plaintext</a>
+  {{end}}
+  {{if .HasFields}}
+  <a href="{{$base}}?view=fields"{{if .Fields}} aria-current="page"{{end}}
+     title="Edit JSON / JS config values field by field">Fields</a>
   {{end}}
 </div>
 {{end}}
